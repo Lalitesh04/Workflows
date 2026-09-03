@@ -56,9 +56,7 @@ jobs:
         run: |
           pip install playwright cloudscraper aiohttp pytz aiohttp-retry
           if [ "${{ steps.playwright-cache.outputs.cache-hit }}" != "true" ]; then
-            python -m playwright install --with-deps chromium
-          else
-            python -m playwright install-deps chromium
+            python -m playwright install chromium
           fi
 
       # 5. Compute Date Code (Today IST)
