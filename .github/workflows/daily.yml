@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: all-india-daily-${{ github.ref }}
+  group: all-india-daily-1-${{ github.ref }}
   cancel-in-progress: false
 
 # 🌍 GLOBAL ENV - 3 REPOSITORIES CONFIGURATION
