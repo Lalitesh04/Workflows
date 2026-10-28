@@ -132,16 +132,20 @@ jobs:
       # 6. Fast Sparse Clone Shards Repo (< 2 seconds)
       - name: Fast Clone Shards Repository
         run: |
+          CLONE_READY=false
           for i in {1..5}; do
             rm -rf shards_repo
-            if git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.SHARDS_REPO }}.git shards_repo; then
+            if git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.SHARDS_REPO }}.git shards_repo && (cd shards_repo && git sparse-checkout set data/$DATE_CODE/shards); then
+              CLONE_READY=true
               break
             fi
-            echo "Retrying shards repo clone ($i/5)..."
+            echo "Retrying shards repo clone/sparse checkout ($i/5)..."
             sleep 4
           done
-          cd shards_repo
-          git sparse-checkout set data/$DATE_CODE/shards
+          if [ "$CLONE_READY" != "true" ]; then
+            echo "Failed to prepare shards repo after 5 attempts."
+            exit 1
+          fi
 
       # 7. Run Scraper Shard (bms_daily.py / district_daily.py)
       - name: Run Scraper Shard
