@@ -133,17 +133,28 @@ jobs:
       - name: Fast Clone Shards Repository
         run: |
           CLONE_READY=false
-          for i in {1..5}; do
+          for i in {1..8}; do
             rm -rf shards_repo
+            if ! getent hosts github.com >/dev/null 2>&1; then
+              echo "github.com DNS lookup failed before clone attempt ($i/8), retrying..."
+              warp-cli --accept-tos disconnect 2>/dev/null || true
+              sleep 2
+              warp-cli --accept-tos connect 2>/dev/null || true
+              sleep 4
+              continue
+            fi
             if git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.SHARDS_REPO }}.git shards_repo && (cd shards_repo && git sparse-checkout set data/$DATE_CODE/shards); then
               CLONE_READY=true
               break
             fi
-            echo "Retrying shards repo clone/sparse checkout ($i/5)..."
+            echo "Retrying shards repo clone/sparse checkout ($i/8)..."
+            warp-cli --accept-tos disconnect 2>/dev/null || true
+            sleep 2
+            warp-cli --accept-tos connect 2>/dev/null || true
             sleep 4
           done
           if [ "$CLONE_READY" != "true" ]; then
-            echo "Failed to prepare shards repo after 5 attempts."
+            echo "Failed to prepare shards repo after 8 attempts."
             exit 1
           fi
 
