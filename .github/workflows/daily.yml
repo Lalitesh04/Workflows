@@ -19,12 +19,12 @@ jobs:
 # 1️⃣ SCRAPE (15 PARALLEL SHARDS: 14 BMS + 1 District -> Allindiadaily-shards)
 # =====================================================
   scrape:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
 
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
 
     env:
       SHARD_ID: ${{ matrix.shard }}
@@ -58,6 +58,11 @@ jobs:
           if [ "${{ steps.playwright-cache.outputs.cache-hit }}" != "true" ]; then
             python -m playwright install chromium
           fi
+          # Ensure xvfb is installed for headless=False browser execution
+          if ! command -v xvfb-run >/dev/null 2>&1; then
+            sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=15
+            sudo apt-get install -y --no-install-recommends xvfb xauth
+          fi
 
       # 4b. Cache Cloudflare WARP Package
       - name: Cache Cloudflare WARP Package
@@ -84,15 +89,17 @@ jobs:
           # 1. Download directly from Cloudflare global CDN if not in cache (No apt-get / No mirrors)
           if [ ! -s "$WARP_DEB" ]; then
             echo "📥 Downloading Cloudflare WARP deb directly..."
-            curl -fsSL --retry 3 --connect-timeout 10 "https://pkg.cloudflareclient.com/pool/noble/main/c/cloudflare-warp/cloudflare-warp_2026.8.2115.0_amd64.deb" -o "$WARP_DEB" || true
+            curl -fsSL --retry 3 --connect-timeout 10 "https://pkg.cloudflareclient.com/pool/jammy/main/c/cloudflare-warp/cloudflare-warp_2026.8.2115.0_amd64.deb" -o "$WARP_DEB" || true
           fi
 
           # 2. Extract binaries directly using dpkg-deb (Bypasses APT completely)
           if [ -s "$WARP_DEB" ]; then
             sudo dpkg-deb -x "$WARP_DEB" /
+            # Install service unit and start daemon
+            sudo cp /lib/systemd/system/warp-svc.service /etc/systemd/system/ 2>/dev/null || true
             sudo systemctl daemon-reload 2>/dev/null || true
-            sudo systemctl start warp-svc.service || sudo service warp-svc start || true
-            sleep 2
+            sudo systemctl start warp-svc.service 2>/dev/null || sudo /usr/bin/warp-svc >/dev/null 2>&1 &
+            sleep 3
 
             warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || true
             warp-cli --accept-tos mode warp 2>/dev/null || warp-cli --accept-tos set-mode warp 2>/dev/null || true
@@ -129,7 +136,11 @@ jobs:
           if [ "$SHARD_ID" == "15" ]; then
             python district_daily.py "$DATE_CODE"
           else
-            xvfb-run python bms_daily.py "$SHARD_ID" "$DATE_CODE"
+            if command -v xvfb-run >/dev/null 2>&1; then
+              xvfb-run -a python bms_daily.py "$SHARD_ID" "$DATE_CODE"
+            else
+              python bms_daily.py "$SHARD_ID" "$DATE_CODE"
+            fi
           fi
 
       # 8. Push Shard to Allindiadaily-shards (With Auto-Rebase Retry)
@@ -158,7 +169,7 @@ jobs:
 # =====================================================
   combine:
     needs: scrape
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
 
     steps:
       # 1. Clone Code Repository (IndiaCodes)
