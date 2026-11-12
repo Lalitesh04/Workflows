@@ -1,22 +1,23 @@
-name: ALL INDIA DAILY
+name: ALL INDIA ADVANCE
 
 on:
+
   workflow_dispatch:
 
 concurrency:
-  group: all-india-daily-${{ github.ref }}
+  group: all-india-advance-${{ github.ref }}
   cancel-in-progress: false
 
 # 🌍 GLOBAL ENV - 3 REPOSITORIES CONFIGURATION
 env:
   CODE_REPO: MintBox04/IndiaCodes
-  SHARDS_REPO: MintBox04/Allindiadaily-shards
-  DATA_REPO: MintBox04/Allindiadaily-data
+  SHARDS_REPO: MintBox04/AllindiaAdvance-Shards
+  DATA_REPO: MintBox04/AllindiaAdvance-data
 
 jobs:
 
 # =====================================================
-# 1️⃣ SCRAPE (15 PARALLEL SHARDS: 14 BMS + 1 District -> Allindiadaily-shards)
+# 1️⃣ SCRAPE (15 PARALLEL SHARDS: 14 BMS + 1 District -> AllindiaAdvance-Shards)
 # =====================================================
   scrape:
     runs-on: ubuntu-22.04
@@ -153,37 +154,37 @@ jobs:
           echo "=================================================="
           echo "🚀 IP AFTER WARP: $(curl -s --connect-timeout 5 https://api.ipify.org || curl -s https://ifconfig.me || echo 'Unknown')"
           echo "=================================================="
-      # 5. Compute Date Code (Today IST)
+      # 4. Compute Date Code (Tomorrow IST)
       - name: Compute Date Code
         run: |
-          DATE_CODE=$(python -c "from datetime import datetime, timedelta, timezone; print((datetime.now(timezone(timedelta(hours=5, minutes=30)))).strftime('%Y%m%d'))")
+          DATE_CODE=$(python -c "from datetime import datetime, timedelta, timezone; print((datetime.now(timezone(timedelta(hours=5, minutes=30))) + timedelta(days=1)).strftime('%Y%m%d'))")
           echo "DATE_CODE=$DATE_CODE" >> $GITHUB_ENV
-          echo "🚀 Running Daily Shard $SHARD_ID for Date: $DATE_CODE"
+          echo "🚀 Running Shard $SHARD_ID for Date: $DATE_CODE"
 
-      # 6. Fast Sparse Clone Shards Repo (< 2 seconds)
+      # 5. Fast Sparse Clone Shards Repo (< 2 seconds)
       - name: Fast Clone Shards Repository
         run: |
           git clone --depth 1 --filter=blob:none --sparse https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ env.SHARDS_REPO }}.git shards_repo
           cd shards_repo
           git sparse-checkout set data/$DATE_CODE/shards
 
-      # 7. Run Scraper Shard (bms_daily.py / district_daily.py)
+      # 6. Run Scraper Shard (bms_advance_uc.py / district_advance.py)
       - name: Run Scraper Shard
         run: |
           export DATA_DIR="$(pwd)/shards_repo/data"
           cd code_repo
 
           if [ "$SHARD_ID" == "15" ]; then
-            python district_daily.py "$DATE_CODE"
+            python district_advance.py "$DATE_CODE"
           else
             if command -v xvfb-run >/dev/null 2>&1; then
-              xvfb-run -a python bms_daily.py "$SHARD_ID" "$DATE_CODE"
+              xvfb-run -a python bms_advance.py "$SHARD_ID" "$DATE_CODE"
             else
-              python bms_daily.py "$SHARD_ID" "$DATE_CODE"
+              python bms_advance.py "$SHARD_ID" "$DATE_CODE"
             fi
           fi
 
-      # 8. Push Shard to Allindiadaily-shards (With Auto-Rebase Retry)
+      # 7. Push Shard to AllindiaAdvance-Shards (With Auto-Rebase Retry)
       - name: Push Shard to Shards Repo
         run: |
           cd shards_repo
@@ -191,7 +192,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add data/
-          git commit -m "[skip ci] Daily Shard $SHARD_ID ($DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
+          git commit -m "[skip ci] Shard $SHARD_ID ($DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
 
           for i in {1..20}; do
             echo "Push attempt $i/20 for Shard $SHARD_ID..."
@@ -205,7 +206,7 @@ jobs:
 
 
 # =====================================================
-# 2️⃣ COMBINE & LOGS (Outputs -> Allindiadaily-data)
+# 2️⃣ COMBINE & LOGS (Outputs -> AllindiaAdvance-data)
 # =====================================================
   combine:
     needs: scrape
@@ -228,12 +229,12 @@ jobs:
         run: |
           pip install numpy pytz
 
-      # 4. Compute Date Code (Today IST)
+      # 4. Compute Date Code (Tomorrow IST)
       - name: Compute Date Code
         run: |
-          DATE_CODE=$(python -c "from datetime import datetime, timedelta, timezone; print((datetime.now(timezone(timedelta(hours=5, minutes=30)))).strftime('%Y%m%d'))")
+          DATE_CODE=$(python -c "from datetime import datetime, timedelta, timezone; print((datetime.now(timezone(timedelta(hours=5, minutes=30))) + timedelta(days=1)).strftime('%Y%m%d'))")
           echo "DATE_CODE=$DATE_CODE" >> $GITHUB_ENV
-          echo "🎯 Target Daily Date Code: $DATE_CODE"
+          echo "🎯 Target Date Code: $DATE_CODE"
 
       # 5. Fast Sparse Clone Shards & Data Repositories (< 3 seconds total)
       - name: Fast Clone Repositories
@@ -271,9 +272,9 @@ jobs:
           mkdir -p "$FINAL_DIR"
 
           cd code_repo
-          python combine_shards.py "$DATE_CODE" daily
+          python combine_shards.py "$DATE_CODE" advance
 
-      # 8. Commit & Push Final Data & Logs to Allindiadaily-data
+      # 8. Commit & Push Final Data & Logs to AllindiaAdvance-data
       - name: Push Final Data & Logs to Data Repo
         run: |
           cd data_repo
@@ -281,7 +282,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add data/
-          git commit -m "Update Daily Final Data & Growth Logs ($DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
+          git commit -m "Update Final Data & Growth Logs ($DATE_CODE - $(date -u +'%Y-%m-%d %H:%M:%S UTC'))" || echo "No changes to commit"
 
           for i in {1..10}; do
             echo "Push attempt $i to ${{ env.DATA_REPO }}..."
@@ -298,8 +299,8 @@ jobs:
         if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
         continue-on-error: true
         run: |
-          npx wrangler pages project create dailysalesv2 --production-branch=main || true
-          npx wrangler pages deploy data_repo/data --project-name=dailysalesv2 --branch=main --commit-dirty=true
+          npx wrangler pages project create allindiaadvancev2 --production-branch=main || true
+          npx wrangler pages deploy data_repo/data --project-name=allindiaadvancev2 --branch=main --commit-dirty=true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
