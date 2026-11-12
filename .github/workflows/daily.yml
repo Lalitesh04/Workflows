@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
     env:
       SHARD_ID: ${{ matrix.shard }}
@@ -79,9 +79,7 @@ jobs:
           echo "IP BEFORE WARP: $OLD_IP"
           echo "=================================================="
 
-          # Fallback DNS
           echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf > /dev/null
-
           mkdir -p ~/.apt-warp-cache
           WARP_DEB="$HOME/.apt-warp-cache/cloudflare-warp.deb"
 
@@ -89,80 +87,59 @@ jobs:
           if [ ! -s "$WARP_DEB" ]; then
             echo "Downloading Cloudflare WARP deb..."
             DISTRO=$(lsb_release -cs 2>/dev/null || echo "jammy")
-            PKG_PATH=$(curl -fsSL --retry 3 --connect-timeout 10 "https://pkg.cloudflareclient.com/dists/${DISTRO}/main/binary-amd64/Packages" 2>/dev/null | grep -m 1 -o 'pool/[^ ]*cloudflare-warp[^ ]*.deb' || true)
+            PKG_PATH=$(curl -fsSL --retry 3 --connect-timeout 10 \
+              "https://pkg.cloudflareclient.com/dists/${DISTRO}/main/binary-amd64/Packages" \
+              2>/dev/null | grep -m 1 -o 'pool/[^ ]*cloudflare-warp[^ ]*.deb' || true)
             if [ -n "$PKG_PATH" ]; then
-              curl -fsSL --retry 3 --connect-timeout 20 "https://pkg.cloudflareclient.com/${PKG_PATH}" -o "$WARP_DEB" || true
+              curl -fsSL --retry 3 --connect-timeout 20 \
+                "https://pkg.cloudflareclient.com/${PKG_PATH}" -o "$WARP_DEB" || true
             fi
             if [ ! -s "$WARP_DEB" ]; then
-              curl -fsSL --retry 3 --connect-timeout 20 "https://pkg.cloudflareclient.com/pool/jammy/main/c/cloudflare-warp/cloudflare-warp_2026.8.2115.0_amd64.deb" -o "$WARP_DEB" || true
+              curl -fsSL --retry 3 --connect-timeout 20 \
+                "https://pkg.cloudflareclient.com/pool/jammy/main/c/cloudflare-warp/cloudflare-warp_2026.8.2115.0_amd64.deb" \
+                -o "$WARP_DEB" || true
             fi
           fi
 
           if [ -s "$WARP_DEB" ]; then
-            # 2. Install warp-svc runtime deps via apt (SKIP GUI/WebKit/gstreamer deps that cause 404s)
-            sudo apt-get install -y --no-install-recommends \
-              libdbus-1-3 iproute2 nftables libcap2-bin libnss3-tools \
-              libpcap0.8 libtss2-esys-3.0.2-0 libtss2-tctildr0 ca-certificates \
-              2>/dev/null || true
+            # 2. Install via dpkg --force-depends so postinst/systemd runs correctly.
+            #    libwebkit2gtk/gstreamer (GUI tray) deps are skipped - daemon works without them.
+            sudo DEBIAN_FRONTEND=noninteractive dpkg -i --force-depends "$WARP_DEB" 2>/dev/null || true
+            sudo dpkg --configure cloudflare-warp 2>/dev/null || true
 
-            # 3. Extract to TEMP DIR only - NEVER to / (would corrupt system binaries)
-            WARP_TMP=$(mktemp -d)
-            if ! dpkg-deb -x "$WARP_DEB" "$WARP_TMP" 2>/dev/null; then
-              rm -rf "$WARP_TMP"
-              echo "WARP extraction failed"
+            # 3. Start dbus then warp-svc
+            sudo systemctl restart dbus 2>/dev/null || sudo service dbus restart 2>/dev/null || true
+            sudo systemctl enable warp-svc 2>/dev/null || true
+            sudo systemctl start warp-svc 2>/dev/null || sudo service warp-svc start 2>/dev/null || true
+            sleep 5
+
+            # 4. Register and connect
+            warp-cli --accept-tos registration new 2>/dev/null \
+              || warp-cli registration new 2>/dev/null \
+              || warp-cli --accept-tos register 2>/dev/null || true
+            sleep 2
+            warp-cli --accept-tos connect 2>/dev/null || warp-cli connect 2>/dev/null || true
+            sleep 5
+
+            STATUS=$(warp-cli --accept-tos status 2>/dev/null || warp-cli status 2>/dev/null || echo "")
+            echo "WARP STATUS: $STATUS"
+            NEW_IP=$(curl -s --connect-timeout 5 https://api.ipify.org || echo "")
+
+            if echo "$STATUS" | grep -qi "Connected" && [ -n "$NEW_IP" ] && [ "$NEW_IP" != "$OLD_IP" ]; then
+              echo "WARP TUN active! IP: $NEW_IP"
             else
-              sudo install -m 0755 "$WARP_TMP/usr/bin/warp-cli" /usr/local/bin/warp-cli 2>/dev/null || true
-              sudo install -m 0755 "$WARP_TMP/usr/bin/warp-svc" /usr/local/bin/warp-svc 2>/dev/null || true
-              export PATH="/usr/local/bin:$PATH"
-
-              # 4. Create warp user and state dirs (required by warp-svc)
-              sudo useradd --system --no-create-home --home-dir /var/lib/cloudflare-warp \
-                --shell /usr/sbin/nologin --user-group warp 2>/dev/null || true
-              sudo mkdir -p /var/lib/cloudflare-warp /var/log/cloudflare-warp /etc/cloudflare-warp
-              sudo chown -R warp:warp /var/lib/cloudflare-warp /var/log/cloudflare-warp 2>/dev/null || true
-              sudo chmod 700 /var/lib/cloudflare-warp
-
-              # 5. Copy service unit and clean temp
-              sudo cp "$WARP_TMP/lib/systemd/system/warp-svc.service" /etc/systemd/system/ 2>/dev/null \
-                || sudo cp "$WARP_TMP/usr/lib/systemd/system/warp-svc.service" /etc/systemd/system/ 2>/dev/null || true
-              rm -rf "$WARP_TMP"
-
-              # 6. Start dbus (required for warp IPC) then warp-svc daemon
-              sudo systemctl restart dbus 2>/dev/null || sudo service dbus restart 2>/dev/null || true
-              sudo systemctl daemon-reload 2>/dev/null || true
-              sudo systemctl start warp-svc.service 2>/dev/null \
-                || sudo /usr/local/bin/warp-svc --no-dbus-activation >/dev/null 2>&1 &
-              sleep 5
-
-              # 7. Register and connect
-              warp-cli --accept-tos registration new 2>/dev/null \
-                || warp-cli registration new 2>/dev/null \
-                || warp-cli --accept-tos register 2>/dev/null || true
-              sleep 1
+              echo "TUN not routing, trying proxy mode..."
+              warp-cli --accept-tos mode proxy 2>/dev/null || warp-cli mode proxy 2>/dev/null || true
               warp-cli --accept-tos connect 2>/dev/null || warp-cli connect 2>/dev/null || true
-              sleep 5
-
-              # 8. Check TUN routing
-              NEW_IP=$(curl -s --connect-timeout 5 https://api.ipify.org || echo "")
-              STATUS=$(warp-cli --accept-tos status 2>/dev/null || warp-cli status 2>/dev/null || echo "")
-              echo "WARP STATUS: $STATUS"
-
-              if echo "$STATUS" | grep -qi "Connected" && [ "$NEW_IP" != "$OLD_IP" ] && [ -n "$NEW_IP" ]; then
-                echo "WARP TUN active! New IP: $NEW_IP"
+              sleep 3
+              PROXY_IP=$(curl -s --socks5 127.0.0.1:40000 --connect-timeout 5 https://api.ipify.org || echo "")
+              if [ -n "$PROXY_IP" ] && [ "$PROXY_IP" != "$OLD_IP" ]; then
+                echo "SOCKS5 proxy active on :40000 (IP: $PROXY_IP)"
+                echo "HTTP_PROXY=socks5://127.0.0.1:40000" >> $GITHUB_ENV
+                echo "HTTPS_PROXY=socks5://127.0.0.1:40000" >> $GITHUB_ENV
+                echo "ALL_PROXY=socks5://127.0.0.1:40000" >> $GITHUB_ENV
               else
-                echo "TUN not routing (IP=$NEW_IP), trying proxy mode..."
-                warp-cli --accept-tos mode proxy 2>/dev/null || warp-cli mode proxy 2>/dev/null || true
-                warp-cli --accept-tos connect 2>/dev/null || warp-cli connect 2>/dev/null || true
-                sleep 3
-                PROXY_IP=$(curl -s --socks5 127.0.0.1:40000 --connect-timeout 5 https://api.ipify.org || echo "")
-                if [ -n "$PROXY_IP" ] && [ "$PROXY_IP" != "$OLD_IP" ]; then
-                  echo "SOCKS5 proxy active on :40000 (IP: $PROXY_IP)"
-                  echo "HTTP_PROXY=socks5://127.0.0.1:40000" >> $GITHUB_ENV
-                  echo "HTTPS_PROXY=socks5://127.0.0.1:40000" >> $GITHUB_ENV
-                  echo "ALL_PROXY=socks5://127.0.0.1:40000" >> $GITHUB_ENV
-                else
-                  echo "WARP not routing in any mode - continuing with runner IP"
-                fi
+                echo "WARP not routing - continuing with runner IP"
               fi
             fi
           else
