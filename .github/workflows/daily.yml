@@ -115,7 +115,7 @@ jobs:
             sudo systemctl daemon-reload 2>/dev/null || true
             sudo systemctl enable --now warp-svc.service 2>/dev/null || sudo systemctl start warp-svc.service 2>/dev/null || sudo /usr/bin/warp-svc >/dev/null 2>&1 &
 
-            for i in $(seq 1 5); do
+            for i in {1..5}; do
               if pgrep -f warp-svc >/dev/null; then
                 echo "✅ warp-svc daemon running"
                 break
@@ -129,7 +129,7 @@ jobs:
             warp-cli --accept-tos connect 2>/dev/null || warp-cli connect 2>/dev/null || true
 
             CONNECTED=false
-            for i in $(seq 1 12); do
+            for i in {1..12}; do
               STATUS=$(warp-cli --accept-tos status 2>/dev/null || warp-cli status 2>/dev/null || echo "Unknown")
               echo "WARP status ($i/12): $STATUS"
               if echo "$STATUS" | grep -qi "Connected"; then
