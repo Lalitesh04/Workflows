@@ -189,14 +189,24 @@ jobs:
           cd code_repo
 
           if [ "$SHARD_ID" == "15" ]; then
-            python district_daily.py "$DATE_CODE"
+            SCRAPER=(python district_daily.py "$DATE_CODE")
+          elif command -v xvfb-run >/dev/null 2>&1; then
+            SCRAPER=(xvfb-run -a python bms_daily.py "$SHARD_ID" "$DATE_CODE")
           else
-            if command -v xvfb-run >/dev/null 2>&1; then
-              xvfb-run -a python bms_daily.py "$SHARD_ID" "$DATE_CODE"
-            else
-              python bms_daily.py "$SHARD_ID" "$DATE_CODE"
-            fi
+            SCRAPER=(python bms_daily.py "$SHARD_ID" "$DATE_CODE")
           fi
+
+          for attempt in 1 2 3; do
+            echo "Scraper attempt $attempt/3 for shard $SHARD_ID..."
+            if "${SCRAPER[@]}"; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Scraper failed; retrying in 5 seconds..."
+              sleep 5
+            fi
+          done
+          exit 1
 
       # 8. Push Shard to Allindiadaily-shards (With Auto-Rebase Retry)
       - name: Push Shard to Shards Repo
